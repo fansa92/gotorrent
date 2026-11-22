@@ -475,7 +475,11 @@ func (m *Manager) finish(dur time.Duration, interrupted, stalled bool, stallSecs
 		fmt.Fprintf(os.Stderr, "[警告] 连续 %d 秒无下载速度,自动退出\n", stallSecs)
 	}
 	if interrupted {
-		fmt.Fprintln(os.Stderr, "[提示] 已中断,未完成任务保留在会话中(用 --resume 继续)")
+		// 只有确实还有没做完的任务时才提示;RPC shutdown 这类主动退出
+		// 不该让用户以为有东西没下完。
+		if remain := m.unfinished(); len(remain) > 0 {
+			fmt.Fprintf(os.Stderr, "[提示] 已中断,%d 个未完成任务保留在会话中(用 --resume 继续)\n", len(remain))
+		}
 	}
 	if opt.jsonOutput {
 		emitJSON(jsonStatus{Event: "summary", State: "done", Active: 0, Queued: len(m.queue), Total: m.totalWanted()})
@@ -900,17 +904,21 @@ func (m *Manager) refreshTasks(now time.Time) (justDone []*task) {
 
 // writeSession 记录"仍未完成"的任务:排队中 + 等待元数据 + 下载中 + 暂停中。
 func (m *Manager) writeSession() {
+	sessionWarn(saveSession(m.unfinished()))
+}
+
+// unfinished 返回仍未完成的任务规格列表。
+func (m *Manager) unfinished() []taskSpec {
 	var remain []taskSpec
 	for _, tk := range m.tasks {
-		switch tk.state {
-		case stateComplete:
+		if tk.state == stateComplete {
 			continue
 		}
 		s := tk.spec
 		s.Paused = tk.state == statePaused
 		remain = append(remain, s)
 	}
-	sessionWarn(saveSession(remain))
+	return remain
 }
 
 // snapshots 返回全部任务快照。m.tasks 是追加式的,天然按创建时间有序。

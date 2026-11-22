@@ -640,7 +640,9 @@ func newClient(tl *taskLimiter) (*torrent.Client, error) {
 	}
 	completion, err := storage.NewBoltPieceCompletion(stateDir)
 	if err != nil {
-		return nil, fmt.Errorf("打开断点数据库失败: %w", err)
+		// bbolt 对同一文件是独占的:同一下载目录再起一个实例必然拿不到锁。
+		// 这个报错信息对用户来说太含糊,补一句提示。
+		return nil, fmt.Errorf("打开断点数据库失败: %w(该下载目录可能已被另一个 gotorrent 实例占用)", err)
 	}
 	cfg.DefaultStorage = storage.NewFileWithCompletion(baseDir, completion)
 
