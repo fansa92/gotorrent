@@ -1,0 +1,16 @@
+# 构建产物
+gotorrent.exe
+gotorrent
+gotorrent-*
+*.exe
+*.test
+
+# 运行期状态(断点续传库 / 元数据缓存 / 会话文件)
+.gotorrent/
+*.torrent.bolt.db
+session.json
+*.tmp
+
+# 编辑器
+.vscode/
+.idea/
