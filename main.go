@@ -85,6 +85,11 @@ type options struct {
 	inputFile      string   // -i, --input-file     批量任务列表
 	maxConcurrent  int      // --max-concurrent-downloads 同时下载数,0 不限
 	resume         bool     // --resume             恢复 .gotorrent/session.json
+	daemon         bool     // --daemon             守护模式:常驻运行并开放控制面
+	rpcListen      string   // --rpc-listen         控制面监听地址,如 127.0.0.1:6800
+	rpcSecret      string   // --rpc-secret         控制面令牌鉴权(Authorization: Bearer)
+	rssFile        string   // --rss-file           RSS 订阅配置文件路径
+	rssInterval    int      // --rss-interval       RSS 轮询间隔(分钟),0 关闭
 }
 
 var opt options
@@ -246,6 +251,11 @@ func parseFlags() {
 	flag.IntVar(&opt.maxConcurrent, "max-concurrent-downloads", cfgInt(cfg, "max-concurrent-downloads", 0), "同时下载的任务数,0 不限")
 	flag.BoolVar(&opt.jsonOutput, "json", cfgBool(cfg, "json", false), "每任务一行 JSON 状态输出到 stdout")
 	flag.BoolVar(&opt.resume, "resume", false, "恢复 .gotorrent/session.json 中未完成的任务")
+	flag.BoolVar(&opt.daemon, "daemon", cfgBool(cfg, "daemon", false), "守护模式:常驻运行并开放控制面")
+	flag.StringVar(&opt.rpcListen, "rpc-listen", cfgStr(cfg, "rpc-listen", ""), "控制面监听地址,如 127.0.0.1:6800;0 表示随机端口")
+	flag.StringVar(&opt.rpcSecret, "rpc-secret", cfgStr(cfg, "rpc-secret", ""), "控制面令牌鉴权,请求需带 Authorization: Bearer <token>")
+	flag.StringVar(&opt.rssFile, "rss-file", cfgStr(cfg, "rss-file", ""), "RSS 订阅配置文件,每行一个订阅")
+	flag.IntVar(&opt.rssInterval, "rss-interval", cfgInt(cfg, "rss-interval", 30), "RSS 轮询间隔(分钟),0 关闭")
 
 	flag.Usage = usage
 	flag.Parse()
@@ -261,6 +271,13 @@ func parseFlags() {
 	}
 	if opt.maxConcurrent < 0 {
 		fatalf("--max-concurrent-downloads 不能为负数")
+	}
+	if opt.rssInterval < 0 {
+		fatalf("--rss-interval 不能为负数")
+	}
+	// 守护模式默认监听 127.0.0.1:6800(aria2 同款端口),显式给 0 则随机端口。
+	if opt.daemon && opt.rpcListen == "" {
+		opt.rpcListen = "127.0.0.1:6800"
 	}
 	// --no-encrypt 是 --encryption tolerated 的兼容别名,显式设置时覆盖。
 	if opt.noEncrypt {
@@ -760,13 +777,21 @@ func saveMetaCache(t *torrent.Torrent) {
 
 // task 跟踪单个 torrent 的下载状态
 type task struct {
+	id         string    // 任务 ID = infohash 十六进制,跨重启稳定
 	t          *torrent.Torrent
 	name       string
 	spec       taskSpec // 该任务的参数(独立限速、选择规则、会话恢复)
-	wanted     int64    // 需要下载的文件总字节数
-	wantPieces []int    // 被选中文件覆盖的分片下标(完成判定基准)
-	prevRead   int64    // 上轮统计:有效下载字节
-	prevWrite  int64    // 上轮统计:上传字节
+	state      taskState
+	created    time.Time
+	err        string       // 失败原因(state == stateError 时有效)
+	selected   map[int]bool // 被选中的文件编号(1-based),与实时优先级解耦
+	selFiles   []*torrent.File
+	highSet    map[int]bool // --priority-high 命中的文件编号
+	wanted     int64        // 需要下载的文件总字节数
+	wantPieces []int        // 被选中文件覆盖的分片下标(完成判定基准)
+	seedStart  time.Time    // 进入做种状态的时间(做种时长上限从此刻起算)
+	prevRead   int64        // 上轮统计:有效下载字节
+	prevWrite  int64        // 上轮统计:上传字节
 	lastSample time.Time
 	speed      float64
 	upSpeed    float64
@@ -776,6 +801,63 @@ type task struct {
 	renameOut  string   // -o 目标文件名(仅单文件 torrent)
 	renamed    bool     // 是否已执行过重命名
 	renamedTo  string   // 重命名成功后的相对路径(供钩子取真实路径)
+}
+
+// wantedBytesDone 统计被选中文件的已完成字节数。
+//
+// 注意:不能直接按"当前优先级 != None"过滤——暂停时所有文件优先级被降到
+// None,那样算出来永远是 0,进度条会倒退。File.BytesCompleted() 本身与
+// 优先级无关(是已完成分片之和),所以按缓存的选中集合统计才正确。
+func (tk *task) wantedBytesDone() int64 {
+	var n int64
+	for _, f := range tk.selFiles {
+		n += f.BytesCompleted()
+	}
+	return n
+}
+
+// snapshot 返回任务的状态快照,供 --json 输出与 RPC 控制面共用。
+func (tk *task) snapshot() jsonStatus {
+	var st torrent.TorrentStats
+	if tk.t != nil {
+		st = tk.t.Stats()
+	}
+	done := tk.wantedBytesDone()
+	pct := 0.0
+	if tk.wanted > 0 {
+		pct = float64(done) / float64(tk.wanted) * 100
+	}
+	eta := 0.0
+	if tk.speed > 0 && tk.wanted > done {
+		eta = float64(tk.wanted-done) / tk.speed
+	}
+	return jsonStatus{
+		ID:            tk.id,
+		Name:          tk.name,
+		InfoHash:      tk.infoHash(),
+		Input:         tk.spec.Input,
+		State:         string(tk.state),
+		Total:         tk.wanted,
+		Completed:     done,
+		Progress:      round2(pct),
+		DownloadSpeed: round2(tk.speed),
+		UploadSpeed:   round2(tk.upSpeed),
+		Peers:         st.ActivePeers,
+		Seeders:       st.ConnectedSeeders,
+		ETA:           round2(eta),
+		Active:        0,
+		Queued:        0,
+		Error:         tk.err,
+		CreatedAt:     tk.created.Format(time.RFC3339),
+	}
+}
+
+// infoHash 返回任务的 infohash;尚未加入客户端时回退到 ID。
+func (tk *task) infoHash() string {
+	if tk.t != nil {
+		return tk.t.InfoHash().HexString()
+	}
+	return tk.id
 }
 
 // complete 判断所有"需要下载"的分片是否已完成。
@@ -1012,8 +1094,9 @@ func (tk *task) runOnComplete(ctx context.Context, w io.Writer) {
 // 做种
 // -----------------------------------------------------------------------------
 
-func waitSeeding(ctx context.Context, tasks []*task) {
-	fmt.Fprintln(out, "\n[做种中] 按 Ctrl+C 退出")
+// 做种的时长 / 分享率上限由引擎在主循环里逐任务判定(见 engine.go),
+// 这里只保留上限的提示文案。
+func printSeedLimits() {
 	switch {
 	case opt.seedRatio > 0 && opt.seedTime > 0:
 		fmt.Fprintf(out, "[做种上限] 分享率 %.2f 或 %g 分钟,任一达到即停止\n", opt.seedRatio, opt.seedTime)
@@ -1021,54 +1104,6 @@ func waitSeeding(ctx context.Context, tasks []*task) {
 		fmt.Fprintf(out, "[做种上限] 分享率达到 %.2f 即停止\n", opt.seedRatio)
 	case opt.seedTime > 0:
 		fmt.Fprintf(out, "[做种上限] %g 分钟后停止\n", opt.seedTime)
-	}
-	ticker := time.NewTicker(2 * time.Second)
-	defer ticker.Stop()
-	start := time.Now()
-	var lastUp int64
-	interval := 2.0
-	for {
-		select {
-		case <-ctx.Done():
-			fmt.Fprintln(out)
-			return
-		case <-ticker.C:
-		}
-		var up, peers, wanted int64
-		ratioOK, hasDownload := true, false
-		for _, tk := range tasks {
-			if !tk.done {
-				continue
-			}
-			st := tk.t.Stats()
-			w := st.BytesWrittenData.Int64()
-			up += w
-			peers += int64(st.ActivePeers)
-			wanted += tk.wanted
-			// 已存在(未下载)的任务没有分享率基数,不参与比率判定
-			if tk.wanted > 0 {
-				hasDownload = true
-				if opt.seedRatio > 0 && float64(w) < opt.seedRatio*float64(tk.wanted) {
-					ratioOK = false
-				}
-			}
-		}
-		sp := float64(up-lastUp) / interval
-		lastUp = up
-		ratio := 0.0
-		if wanted > 0 {
-			ratio = float64(up) / float64(wanted)
-		}
-		fmt.Fprintf(out, "\r[做种] 已上传 %s | 速度 %s | 对等点 %d | 分享率 %.2f | 已运行 %s%12s",
-			human(up), humanBps(int64(sp)), peers, ratio, time.Since(start).Round(time.Second), "")
-		if opt.seedTime > 0 && time.Since(start) >= time.Duration(opt.seedTime*float64(time.Minute)) {
-			fmt.Fprintf(out, "\n[做种结束] 已达到做种时长上限(%g 分钟)\n", opt.seedTime)
-			return
-		}
-		if opt.seedRatio > 0 && hasDownload && ratioOK {
-			fmt.Fprintf(out, "\n[做种结束] 已达到分享率上限(%.2f)\n", opt.seedRatio)
-			return
-		}
 	}
 }
 
@@ -1138,33 +1173,11 @@ func downloadAllFiles(files []*torrent.File) {
 // wantedPieceIndexes 返回被选中文件覆盖的分片下标(升序去重)。
 // 注意:不能改用 PieceState.Priority 判断"是否需要下载" —— 那是
 // effectivePriority(),会把"已完成"和"完成状态未知"的分片都报成 None。
+//
+// 引擎用的是 pieceIndexesOfFiles(按缓存的选中文件集合计算),因为暂停时
+// 文件优先级会被降到 None,再按优先级过滤就分不清"没选"和"已暂停"了。
 func wantedPieceIndexes(t *torrent.Torrent) []int {
-	seen := map[int]bool{}
-	var out []int
-	for _, f := range t.Files() {
-		if f.Priority() == torrent.PiecePriorityNone {
-			continue
-		}
-		for i := f.BeginPieceIndex(); i < f.EndPieceIndex(); i++ {
-			if !seen[i] {
-				seen[i] = true
-				out = append(out, i)
-			}
-		}
-	}
-	return out
-}
-
-// wantedBytesDone 统计被选中文件的已完成字节数(用于进度百分比,
-// 避免部分选择时用整个 torrent 的 BytesCompleted 导致百分比超过 100%)
-func wantedBytesDone(t *torrent.Torrent) int64 {
-	var n int64
-	for _, f := range t.Files() {
-		if f.Priority() != torrent.PiecePriorityNone {
-			n += f.BytesCompleted()
-		}
-	}
-	return n
+	return pieceIndexesOfFiles(t.Files())
 }
 
 // -----------------------------------------------------------------------------

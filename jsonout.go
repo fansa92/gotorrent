@@ -26,6 +26,8 @@ type jsonFile struct {
 type jsonStatus struct {
 	Event         string     `json:"event"` // progress / complete / start / error / summary
 	Time          string     `json:"time"`
+	ID            string     `json:"id,omitempty"`           // 任务 ID(infohash)
+	CreatedAt     string     `json:"created_at,omitempty"`  // 任务创建时间
 	Name          string     `json:"name,omitempty"`
 	InfoHash      string     `json:"infohash,omitempty"`
 	Input         string     `json:"input,omitempty"`
@@ -55,42 +57,6 @@ func emitJSON(s jsonStatus) {
 		return
 	}
 	fmt.Fprintln(os.Stdout, string(b))
-}
-
-func (tk *task) statusLine(event string, active, queued int) jsonStatus {
-	st := tk.t.Stats()
-	done := wantedBytesDone(tk.t)
-	pct := 0.0
-	if tk.wanted > 0 {
-		pct = float64(done) / float64(tk.wanted) * 100
-	}
-	eta := 0.0
-	if tk.speed > 0 && tk.wanted > done {
-		eta = float64(tk.wanted-done) / tk.speed
-	}
-	state := "downloading"
-	if tk.done {
-		state = "complete"
-	} else if done == 0 && tk.speed <= 0 {
-		state = "waiting"
-	}
-	return jsonStatus{
-		Event:         event,
-		Name:          tk.name,
-		InfoHash:      tk.t.InfoHash().HexString(),
-		Input:         tk.spec.Input,
-		State:         state,
-		Total:         tk.wanted,
-		Completed:     done,
-		Progress:      round2(pct),
-		DownloadSpeed: round2(tk.speed),
-		UploadSpeed:   round2(tk.upSpeed),
-		Peers:         st.ActivePeers,
-		Seeders:       st.ConnectedSeeders,
-		ETA:           round2(eta),
-		Active:        active,
-		Queued:        queued,
-	}
 }
 
 func round2(v float64) float64 {

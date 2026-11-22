@@ -23,6 +23,7 @@ type taskSpec struct {
 	PriorityHigh string `json:"priority_high,omitempty"` // 该任务优先下载的文件
 	LimitRate    string `json:"limit_rate,omitempty"`    // 该任务独立下载限速
 	UploadRate   string `json:"max_upload_limit,omitempty"`
+	Paused       bool   `json:"paused,omitempty"` // 上次退出时该任务处于暂停状态
 }
 
 // sessionOptions 保存会影响到续传行为的全局参数;--resume 时用于补齐
