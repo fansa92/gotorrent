@@ -81,7 +81,7 @@ func TestParseRSSFile(t *testing.T) {
 		"url=x\ninclude=[\n", // 非法正则
 		"url=x\nunknown=1\n", // 未知参数
 		"include=x\n",        // url 之前不允许出现参数
-		"# 只有注释\n",         // 没有订阅源
+		"# 只有注释\n",           // 没有订阅源
 	} {
 		if err := os.WriteFile(bad, []byte(c), 0o644); err != nil {
 			t.Fatal(err)
@@ -518,12 +518,12 @@ func TestRPCParamHelpers(t *testing.T) {
 func TestAria2StatusMapping(t *testing.T) {
 	cases := map[string]string{
 		string(stateDownloading): "active",
-		string(stateSeeding):    "active",
-		string(stateQueued):     "waiting",
-		string(stateWaiting):    "waiting",
-		string(statePaused):     "paused",
-		string(stateComplete):   "complete",
-		string(stateError):      "error",
+		string(stateSeeding):     "active",
+		string(stateQueued):      "waiting",
+		string(stateWaiting):     "waiting",
+		string(statePaused):      "paused",
+		string(stateComplete):    "complete",
+		string(stateError):       "error",
 	}
 	for state, want := range cases {
 		got := aria2Status(jsonStatus{State: state})

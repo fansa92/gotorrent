@@ -427,7 +427,8 @@ func usage() {
     limit-rate=2M max-upload-limit=512K];任务行内参数只作用于该任务,
     --limit-rate 等全局参数作为缺省;每任务配额独立,总闸按活跃任务求和。
   * --json 时人读提示全部走 stderr,stdout 只输出 NDJSON,event 取值:
-    start / progress / complete / error / info / summary / hash / stream。
+    added / start / progress / complete / paused / resumed / removed /
+    seeding / error / info / summary / hash / stream。
   * --encryption required 会拒绝未加密的对等点,部分老客户端可能连不上;
     preferred 优先加密但兼容明文(默认);tolerated 不主动要求加密。
   * --priority-high 只改变调度顺序(高优先级分片先请求),不改变"选哪些文件";
@@ -436,6 +437,15 @@ func usage() {
   * --stream 启动后在 stderr 打印 http://127.0.0.1:<port>/stream,播放器直接
     打开即可边下边播(VLC/PotPlayer/mpv);下载完成后服务保持,按 Ctrl+C 退出。
     与 -o 重命名互斥(流服务按原文件名读取)。
+  * RSS 订阅配置(--rss-file)按块书写,每块以 url= 开始,后面的键值属于该订阅:
+      url=https://example.com/feed.xml
+      include=.*1080p.*
+      exclude=.*720p.*
+      dir=D:/media/movies
+    include / exclude 是作用于条目标题的正则,exclude 优先。已处理的条目记在
+    <配置文件>.seen,重启后不会重复下载。
+  * --daemon 守护模式下任务可随时通过控制面增删改查。暂停的任务连同状态一起
+    写进会话,--resume 恢复后仍是暂停状态,需显式 resume 才会继续下载。
 
 示例:
   gotorrent ubuntu.torrent
@@ -831,7 +841,7 @@ func saveMetaCache(t *torrent.Torrent) {
 
 // task 跟踪单个 torrent 的下载状态
 type task struct {
-	id         string    // 任务 ID = infohash 十六进制,跨重启稳定
+	id         string // 任务 ID = infohash 十六进制,跨重启稳定
 	t          *torrent.Torrent
 	name       string
 	spec       taskSpec // 该任务的参数(独立限速、选择规则、会话恢复)

@@ -146,5 +146,3 @@ func applySelectionSet(t *torrent.Torrent, set map[int]bool) bool {
 	}
 	return n > 0
 }
-
-

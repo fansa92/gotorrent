@@ -1,0 +1,7 @@
+# 统一按 LF 存储,检出时按平台转换,避免不同机器上互相污染。
+* text=auto eol=lf
+
+# 二进制文件不做换行转换
+*.torrent binary
+*.exe binary
+*.db binary

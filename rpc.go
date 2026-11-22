@@ -260,11 +260,11 @@ func (s *rpcServer) dispatch(method string, params []json.RawMessage) (any, erro
 			}
 		}
 		return map[string]any{
-			"downloadSpeed": fmt.Sprintf("%d", int64(0)),
-			"numActive":     fmt.Sprintf("%d", active),
-			"numWaiting":    fmt.Sprintf("%d", waiting),
-			"numStopped":    fmt.Sprintf("%d", 0),
-			"totalLength":   fmt.Sprintf("%d", total),
+			"downloadSpeed":   fmt.Sprintf("%d", int64(0)),
+			"numActive":       fmt.Sprintf("%d", active),
+			"numWaiting":      fmt.Sprintf("%d", waiting),
+			"numStopped":      fmt.Sprintf("%d", 0),
+			"totalLength":     fmt.Sprintf("%d", total),
 			"completedLength": fmt.Sprintf("%d", completed),
 		}, nil
 	case "shutdown":

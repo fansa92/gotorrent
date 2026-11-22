@@ -30,8 +30,8 @@ type jsonFile struct {
 type jsonStatus struct {
 	Event         string     `json:"event"` // progress / complete / start / error / summary
 	Time          string     `json:"time"`
-	ID            string     `json:"id,omitempty"`           // 任务 ID(infohash)
-	CreatedAt     string     `json:"created_at,omitempty"`  // 任务创建时间
+	ID            string     `json:"id,omitempty"`         // 任务 ID(infohash)
+	CreatedAt     string     `json:"created_at,omitempty"` // 任务创建时间
 	Name          string     `json:"name,omitempty"`
 	InfoHash      string     `json:"infohash,omitempty"`
 	Input         string     `json:"input,omitempty"`
