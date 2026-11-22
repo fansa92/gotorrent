@@ -7,6 +7,7 @@ import (
 	"bufio"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 	"time"
@@ -14,7 +15,10 @@ import (
 
 // out 是人读输出的目标。普通模式为 stdout;--json 时切到 stderr,
 // 保证 stdout 是纯 NDJSON 流。
-var out = os.Stdout
+//
+// 声明成 io.Writer 而不是 *os.File,是为了让测试能把它换成 io.Discard,
+// 以及让调用方可以接任意 Writer。
+var out io.Writer = os.Stdout
 
 type jsonFile struct {
 	Index    int    `json:"index"`

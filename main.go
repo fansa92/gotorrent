@@ -140,7 +140,8 @@ func main() {
 	for _, in := range flag.Args() {
 		addSpec(taskSpec{Input: in})
 	}
-	if len(specs) == 0 {
+	if len(specs) == 0 && !opt.daemon {
+		// 守护模式允许零任务启动:等控制面下指令。
 		usage()
 		os.Exit(2)
 	}
@@ -191,7 +192,44 @@ func main() {
 		os.Exit(1)
 	}()
 
-	run(ctx, cl, specs, tl)
+	m := run(ctx, cl, specs, tl)
+	if m == nil {
+		return // --all / --dry-run 已完成
+	}
+
+	// 守护模式:挂上控制面后常驻运行,等 Ctrl+C 或 RPC shutdown。
+	var rpc *rpcServer
+	if opt.daemon {
+		var err error
+		rpc, err = startRPC(ctx, m, opt.rpcListen, opt.rpcSecret, cancel)
+		if err != nil {
+			fatalf("启动控制面失败: %v", err)
+		}
+		fmt.Fprintf(out, "[控制面] 已就绪: %s\n", rpc.url)
+		fmt.Fprintln(out, "[控制面] JSON-RPC: POST /rpc | REST: /api/tasks | 事件流: GET /events")
+		if opt.rpcSecret != "" {
+			fmt.Fprintln(out, "[控制面] 已启用令牌鉴权: Authorization: Bearer <token> 或 ?token=<token>")
+		}
+	}
+
+	// RSS 订阅:常驻轮询订阅源,命中的条目自动入队。
+	if opt.rssFile != "" {
+		if err := startRSS(ctx, m, opt.rssFile, opt.rssInterval); err != nil {
+			fmt.Fprintf(os.Stderr, "[警告] RSS 订阅启动失败: %v\n", err)
+		}
+	}
+
+	m.Wait()
+	if rpc != nil {
+		rpc.Close()
+	}
+
+	// 边下边播:即使下载结束也保持进程与服务,直到用户 Ctrl+C。
+	// 否则播放器刚打开就被断开,失去串流的意义。
+	if opt.stream {
+		fmt.Fprintln(out, "[流] 下载已完成,服务保持中;按 Ctrl+C 退出")
+		<-ctx.Done()
+	}
 }
 
 // -----------------------------------------------------------------------------
@@ -345,6 +383,22 @@ func usage() {
       --stream-port <n>       流服务端口                      [默认: 8080,0 随机]
       --stream-file <规则>    指定串流文件(编号或 glob)
       --blocklist <文件>      IP 黑名单(每行 描述:起始IP-结束IP)
+
+守护模式与控制面:
+      --daemon                常驻运行,开放控制面;允许零任务启动
+      --rpc-listen <地址>     控制面监听地址            [默认: 127.0.0.1:6800]
+      --rpc-secret <令牌>     控制面令牌鉴权(Authorization: Bearer 或 ?token=)
+      --rss-file <文件>       RSS 订阅配置文件
+      --rss-interval <分钟>   RSS 轮询间隔             [默认: 30]
+
+控制面接口(同一套引擎,三种用法):
+  POST /rpc             JSON-RPC 2.0,方法名对齐 aria2:
+                         addUri / addTorrent / tellStatus / tellActive /
+                         tellWaiting / tellStopped / pause / unpause /
+                         remove / getVersion / getGlobalStat / shutdown
+  /api/tasks/...        REST:GET 列表、POST 添加、DELETE 移除、
+                         POST /api/tasks/{id}/pause 与 /resume
+  GET /events            SSE 实时事件流(连接时先推一份全量快照)
 
 子命令:
   create <文件|目录>          制作 .torrent 文件

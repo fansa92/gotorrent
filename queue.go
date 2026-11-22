@@ -21,10 +21,11 @@ import (
 //
 // CLI 与 RPC 守护模式共用同一个 Manager,差别只在 daemon 标志:
 // 守护模式主循环不会自己退出,一直等外部命令(Ctrl+C / RPC shutdown)。
-func run(ctx context.Context, cl *torrent.Client, specs []taskSpec, tl *taskLimiter) {
+// 返回引擎实例,供调用方挂控制面;--all / --dry-run 时返回 nil。
+func run(ctx context.Context, cl *torrent.Client, specs []taskSpec, tl *taskLimiter) *Manager {
 	if opt.all || opt.dryRun {
 		runInspect(ctx, cl, specs)
-		return
+		return nil
 	}
 	m := newManager(ctx, cl, tl)
 	m.daemon = opt.daemon
@@ -43,13 +44,7 @@ func run(ctx context.Context, cl *torrent.Client, specs []taskSpec, tl *taskLimi
 		}
 	}()
 	m.AddAll(specs)
-	m.Wait()
-	// 边下边播:即使下载结束也保持进程与服务,直到用户 Ctrl+C。
-	// 否则播放器刚打开就被断开,失去串流的意义。
-	if opt.stream {
-		fmt.Fprintln(out, "[流] 下载已完成,服务保持中;按 Ctrl+C 退出")
-		<-ctx.Done()
-	}
+	return m
 }
 
 // runInspect 处理 --all / --dry-run:不下载、不写会话。

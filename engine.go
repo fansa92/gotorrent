@@ -126,6 +126,10 @@ type Manager struct {
 
 	p *mpb.Progress
 
+	// bars 记录创建过的所有进度条。任务被移除后进度条仍归 mpb 管着,
+	// 如果不 abort,收尾时的 p.Wait() 会一直等下去——所以这里单独留一份账。
+	bars []*mpb.Bar
+
 	// seedShown 保证"[做种中]"只提示一次。
 	seedShown bool
 
@@ -459,9 +463,9 @@ func (m *Manager) printSeedingStatus(now time.Time) {
 // finish 收尾:汇总输出、写会话。
 func (m *Manager) finish(dur time.Duration, interrupted, stalled bool, stallSecs int) {
 	if m.p != nil {
-		for _, tk := range m.tasks {
-			if !tk.done && tk.bar != nil {
-				tk.bar.Abort(true)
+		for _, b := range m.bars {
+			if b != nil && !b.AbortedOrCompleted() {
+				b.Abort(true)
 			}
 		}
 		m.p.Wait()
@@ -613,6 +617,11 @@ func (m *Manager) removeTask(id string, deleteFiles bool) error {
 		return fmt.Errorf("任务不存在: %s", id)
 	}
 	m.removeFromQueue(tk)
+	if tk.bar != nil && !tk.bar.AbortedOrCompleted() {
+		// 进度条归 mpb 管着,任务移出列表后还得单独收掉,
+		// 否则收尾时 p.Wait() 会一直等这条永远不会再前进的进度条。
+		tk.bar.Abort(true)
+	}
 	if tk.t != nil {
 		if deleteFiles {
 			m.deleteTaskData(tk)
@@ -827,6 +836,7 @@ func (m *Manager) activate(tk *task) {
 	}
 	if m.p != nil {
 		attachBar(m.p, tk)
+		m.bars = append(m.bars, tk.bar)
 	}
 	m.emit(evStart, tk)
 	m.tl.setActive(m.tasks)
