@@ -40,7 +40,6 @@ import (
 	"github.com/anacrolix/torrent/storage"
 	"github.com/vbauerster/mpb/v8"
 	"golang.org/x/net/proxy"
-	"golang.org/x/time/rate"
 )
 
 var version = "1.0.0"
@@ -1082,8 +1081,6 @@ type selection struct {
 	set map[int]bool
 }
 
-func (s selection) has(n int) bool { return s.set[n] }
-
 // parseSelect 解析 "1,3-5" 之类的编号表达式;"0" 或空表示全部
 func parseSelect(spec string) selection {
 	sel := selection{all: true, set: map[int]bool{}}
@@ -1195,18 +1192,6 @@ func parseSize(s string) (int64, error) {
 		return 0, fmt.Errorf("非法速度值 %q", s)
 	}
 	return int64(f * float64(mul)), nil
-}
-
-func rateLimiter(s string) (*rate.Limiter, error) {
-	n, err := parseSize(s)
-	if err != nil || n == 0 {
-		return nil, err
-	}
-	burst := 1 << 16 // 需大于单个 chunk(16KiB)
-	if int(n) > burst {
-		burst = int(n)
-	}
-	return rate.NewLimiter(rate.Limit(n), burst), nil
 }
 
 func absDir(p string) (string, error) {

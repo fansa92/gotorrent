@@ -147,14 +147,4 @@ func applySelectionSet(t *torrent.Torrent, set map[int]bool) bool {
 	return n > 0
 }
 
-// applySelection 应用选择并校验至少有一个文件被选中。
-// 单文件 torrent 且 -s 1 / -s 0 时沿用全量的兼容行为。
-func applySelection(t *torrent.Torrent, selSpec, filterSpec string) bool {
-	files := t.Files()
-	filter := parseFilterSpec(filterSpec)
-	if len(files) == 1 && !filter.set && (selSpec == "1" || selSpec == "0" || selSpec == "") {
-		downloadAllFiles(files)
-		return true
-	}
-	return applySelectionSet(t, selectedSet(t, selSpec, filterSpec))
-}
+
