@@ -3,7 +3,9 @@ gotorrent.exe
 gotorrent
 gotorrent-*
 *.exe
+*.exe~
 *.test
+*~
 
 # 运行期状态(断点续传库 / 元数据缓存 / 会话文件)
 .gotorrent/
