@@ -57,7 +57,7 @@ func runInspect(ctx context.Context, cl *torrent.Client, specs []taskSpec) {
 	for _, s := range specs {
 		t, err := addInput(cl, s.Input)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "[错误] 添加任务失败 %s: %v\n", s.Input, err)
+			logError("添加任务失败 %s: %v", s.Input, err)
 			emitError(s.Input, err.Error())
 			continue
 		}

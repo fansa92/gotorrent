@@ -1,0 +1,40 @@
+# gotorrent Docker Compose 部署
+#
+# 启动:  docker compose up -d
+# 日志:  docker compose logs -f
+# 停止:  docker compose down
+#
+# 控制面: http://<host>:6800/ui  (Web 控制面板)
+#         RPC:   POST http://<host>:6800/rpc   (aria2 兼容)
+#         REST:  /api/tasks  ·  事件流: /events  ·  指标: /metrics
+#
+# 生产建议:设置 RPC_SECRET 限制访问,或在前置反代(Nginx/Caddy)做鉴权。
+
+services:
+  gotorrent:
+    build: .
+    image: gotorrent:local
+    container_name: gotorrent
+    restart: unless-stopped
+    ports:
+      - "6800:6800"          # 控制面;改左侧端口可避免与 aria2 冲突
+    environment:
+      # 容器内 HOME,配置文件落在 /config/.gotorrent/config
+      HOME: /config
+      # 建议设置控制面令牌,客户端用 Authorization: Bearer <RPC_SECRET>
+      # RPC_SECRET: change-me
+      # 时区(可选,影响日志与限速调度的时间段判断)
+      TZ: Asia/Shanghai
+    volumes:
+      - ./downloads:/downloads   # 下载与做种数据
+      - ./config:/config         # 配置 + 历史库持久化
+    # 健康检查:探测 Web 控制面板是否响应(镜像内自带 wget)
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:6800/ui"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    # 资源限制(可选,按需调整)
+    # mem_limit: 1g
+    # cpus: 2

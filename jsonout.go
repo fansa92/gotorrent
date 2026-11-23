@@ -46,6 +46,7 @@ type jsonStatus struct {
 	ETA           float64    `json:"eta_seconds"`
 	Active        int        `json:"active"`
 	Queued        int        `json:"queued"`
+	Tag           string     `json:"tag,omitempty"`
 	Error         string     `json:"error,omitempty"`
 	Files         []jsonFile `json:"files,omitempty"`
 	URL           string     `json:"url,omitempty"` // stream 事件的播放地址
@@ -129,6 +130,8 @@ func parseInputFile(path string) ([]taskSpec, error) {
 				s.LimitRate = v
 			case "max-upload-limit":
 				s.UploadRate = v
+			case "tag":
+				s.Tag = v
 			default:
 				return nil, fmt.Errorf("%s:%d 未知参数 %q", path, lineNo, k)
 			}

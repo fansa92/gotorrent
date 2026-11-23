@@ -186,7 +186,7 @@ func (m *Manager) Add(spec taskSpec) (string, error) {
 func (m *Manager) AddAll(specs []taskSpec) {
 	for _, s := range specs {
 		if _, err := m.Add(s); err != nil {
-			fmt.Fprintf(os.Stderr, "[错误] 添加任务失败 %s: %v\n", s.Input, err)
+			logError("添加任务失败 %s: %v", s.Input, err)
 			emitError(s.Input, err.Error())
 		}
 	}
@@ -472,13 +472,13 @@ func (m *Manager) finish(dur time.Duration, interrupted, stalled bool, stallSecs
 	}
 	fmt.Fprintln(out)
 	if stalled {
-		fmt.Fprintf(os.Stderr, "[警告] 连续 %d 秒无下载速度,自动退出\n", stallSecs)
+		logWarn("连续 %d 秒无下载速度,自动退出", stallSecs)
 	}
 	if interrupted {
 		// 只有确实还有没做完的任务时才提示;RPC shutdown 这类主动退出
 		// 不该让用户以为有东西没下完。
 		if remain := m.unfinished(); len(remain) > 0 {
-			fmt.Fprintf(os.Stderr, "[提示] 已中断,%d 个未完成任务保留在会话中(用 --resume 继续)\n", len(remain))
+			logInfo("已中断,%d 个未完成任务保留在会话中(用 --resume 继续)", len(remain))
 		}
 	}
 	if opt.jsonOutput {
@@ -534,6 +534,13 @@ func (m *Manager) addTask(r req) (string, error) {
 	}
 	m.tasks = append(m.tasks, tk)
 	m.byID[r.id] = tk
+	// 历史去重提示:该 infohash 曾下载完成过则提醒(不阻止)。
+	if hist != nil {
+		if prev, ok := hist.Has(r.id); ok {
+			fmt.Fprintf(out, "[历史] %s 之前于 %s 下载完成过(同名:%s),可能重复\n",
+				trunc(prev.Name, 30), prev.CompletedAt.Local().Format("2006-01-02"), prev.Name)
+		}
+	}
 	if spec.Paused {
 		// 从会话恢复的暂停任务:只登记不启动,等 resume 指令。
 		tk.state = statePaused
@@ -630,6 +637,7 @@ func (m *Manager) removeTask(id string, deleteFiles bool) error {
 		if deleteFiles {
 			m.deleteTaskData(tk)
 		}
+		unregisterClassify(tk.t.InfoHash())
 		tk.t.Drop()
 	}
 	// 从任务表里摘掉
@@ -656,7 +664,7 @@ func (m *Manager) deleteTaskData(tk *task) {
 	for _, f := range tk.t.Files() {
 		p := filepath.Join(base, filepath.FromSlash(f.DisplayPath()))
 		if err := os.Remove(p); err != nil && !os.IsNotExist(err) {
-			fmt.Fprintf(os.Stderr, "[警告] 删除文件失败 %s: %v\n", p, err)
+			logWarn("删除文件失败 %s: %v", p, err)
 		}
 	}
 }
@@ -702,7 +710,7 @@ func (m *Manager) fill() {
 		m.queue = m.queue[1:]
 		t, err := addInput(m.cl, tk.spec.Input)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "[错误] 添加任务失败 %s: %v\n", tk.spec.Input, err)
+			logError("添加任务失败 %s: %v", tk.spec.Input, err)
 			emitError(tk.spec.Input, err.Error())
 			tk.state = stateError
 			tk.err = err.Error()
@@ -711,6 +719,14 @@ func (m *Manager) fill() {
 		}
 		tk.t = t
 		tk.state = stateWaiting
+		// 登记归类目标(tag 优先于按类型):storage.OpenTorrent 时读取。
+		if opt.dirByType || firstNonEmpty(tk.spec.Tag, opt.tag) != "" {
+			e := classifyEntry{byType: opt.dirByType}
+			if tg := firstNonEmpty(tk.spec.Tag, opt.tag); tg != "" {
+				e.tag = tg
+			}
+			registerClassify(t.InfoHash(), e)
+		}
 		if !opt.jsonOutput {
 			fmt.Fprintf(out, "[任务] 已添加: %s\n", describeInput(tk.spec.Input, t))
 		}
@@ -735,7 +751,7 @@ func (m *Manager) failTask(tk *task) {
 	tk.state = stateError
 	tk.err = "metadata timeout"
 	if m.ctx.Err() == nil {
-		fmt.Fprintf(os.Stderr, "[警告] %s 获取元数据超时,保留在会话中(可用 --resume 重试)\n", tk.id[:16])
+		logWarn("%s 获取元数据超时,保留在会话中(可用 --resume 重试)", tk.id[:16])
 		emitError(tk.spec.Input, "metadata timeout")
 	}
 	tk.t.Drop()
@@ -767,7 +783,7 @@ func (m *Manager) activate(tk *task) {
 	} else {
 		set = selectedSet(t, sel, filter)
 		if !applySelectionSet(t, set) {
-			fmt.Fprintf(os.Stderr, "[错误] %s: 没有文件被选中,已跳过(用 --all 查看编号)\n", t.Info().Name)
+			logError("%s: 没有文件被选中,已跳过(用 --all 查看编号)", t.Info().Name)
 			emitError(s.Input, "no file selected")
 			t.Drop()
 			tk.state = stateError
@@ -782,7 +798,7 @@ func (m *Manager) activate(tk *task) {
 		// 靠实时优先级反推会丢失"哪些文件是高优先级"的信息。
 		tk.highSet = filesBySpec(t, prio)
 		if n := applyHighPriority(t, prio, set); n == 0 {
-			fmt.Fprintf(os.Stderr, "[警告] --priority-high %q 没有匹配任何文件\n", prio)
+			logWarn("--priority-high %q 没有匹配任何文件", prio)
 		} else if !opt.jsonOutput {
 			fmt.Fprintf(out, "[优先级] %d 个文件优先下载: %s\n", n, prio)
 		}
@@ -790,7 +806,7 @@ func (m *Manager) activate(tk *task) {
 	if opt.verify {
 		fmt.Fprintf(out, "[校验] %s 正在重新校验已有数据...\n", t.Info().Name)
 		if err := t.VerifyDataContext(m.ctx); err != nil && m.ctx.Err() == nil {
-			fmt.Fprintf(os.Stderr, "[警告] %s 校验失败: %v\n", t.Info().Name, err)
+			logWarn("%s 校验失败: %v", t.Info().Name, err)
 		}
 	}
 
@@ -814,10 +830,10 @@ func (m *Manager) activate(tk *task) {
 	// --stream:任务一激活就开服务,不必等下载完(Reader 会阻塞到数据可用)。
 	if opt.stream {
 		if f, err := pickStreamFile(tk, set); err != nil {
-			fmt.Fprintf(os.Stderr, "[错误] 流服务: %v\n", err)
+			logError("流服务: %v", err)
 			emitError(s.Input, "stream: "+err.Error())
 		} else if srv, err := startStream(m.ctx, f, opt.streamPort); err != nil {
-			fmt.Fprintf(os.Stderr, "[错误] 启动流服务失败: %v\n", err)
+			logError("启动流服务失败: %v", err)
 			emitError(s.Input, "stream: "+err.Error())
 		} else {
 			fmt.Fprintf(out, "[流] 已就绪: %s\n", srv.url)
@@ -884,6 +900,13 @@ func (m *Manager) refreshTasks(now time.Time) (justDone []*task) {
 			tk.speed = delta(read, tk.prevRead) / dt
 			tk.upSpeed = delta(write, tk.prevWrite) / dt
 		}
+		// 全局累计字节(单调):用本轮增量累加,prevRead/prevWrite 覆盖前先算。
+		if d := delta(read, tk.prevRead); d > 0 {
+			metricsDownloadTotal.Add(int64(d))
+		}
+		if d := delta(write, tk.prevWrite); d > 0 {
+			metricsUploadTotal.Add(int64(d))
+		}
 		tk.prevRead, tk.prevWrite, tk.lastSample = read, write, now
 		if !tk.done && tk.state == stateDownloading && tk.complete() {
 			tk.done = true
@@ -897,6 +920,24 @@ func (m *Manager) refreshTasks(now time.Time) (justDone []*task) {
 				tk.state = stateComplete
 			}
 			justDone = append(justDone, tk)
+			// 历史记录:非关键,失败只警告。infohash 为主键,重复完成刷新统计。
+			if hist != nil && tk.t != nil {
+				st := tk.t.Stats()
+				err := hist.Record(historyRecord{
+					InfoHash:    tk.infoHash(),
+					Name:        tk.name,
+					Size:        tk.wanted,
+					Downloaded:  st.BytesReadUsefulData.Int64(),
+					Uploaded:    st.BytesWrittenData.Int64(),
+					DurationSec: now.Sub(tk.created).Seconds(),
+					Dir:         mustAbs(opt.dir),
+					Tag:         firstNonEmpty(tk.spec.Tag, opt.tag),
+					CompletedAt: now,
+				})
+				if err != nil {
+					logWarn("记录历史失败 %s: %v", tk.name, err)
+				}
+			}
 		}
 	}
 	return

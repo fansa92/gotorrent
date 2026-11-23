@@ -24,6 +24,7 @@ type taskSpec struct {
 	LimitRate    string `json:"limit_rate,omitempty"`    // 该任务独立下载限速
 	UploadRate   string `json:"max_upload_limit,omitempty"`
 	Paused       bool   `json:"paused,omitempty"` // 上次退出时该任务处于暂停状态
+	Tag          string `json:"tag,omitempty"`    // 标签,用于分类与筛选
 }
 
 // sessionOptions 保存会影响到续传行为的全局参数;--resume 时用于补齐
@@ -289,6 +290,6 @@ func saveSession(tasks []taskSpec) error {
 // sessionWarn 把会话写入失败作为非致命警告(不影响下载)。
 func sessionWarn(err error) {
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "[警告] 更新会话文件失败: %v\n", err)
+		logWarn("更新会话文件失败: %v", err)
 	}
 }

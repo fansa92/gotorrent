@@ -1,0 +1,29 @@
+# 构建上下文瘦身:排除无关文件,加速镜像构建
+.git
+.gitattributes
+.gitignore
+
+# 编译产物与本地二进制(镜像内重新编译)
+*.exe
+gotorrent
+gotorrent.exe
+
+# 本地下载数据与配置,不进镜像
+downloads/
+config/
+*.db
+
+# 文档与部署文件本身
+README.md
+docker-compose.yml
+deploy/
+
+# 临时与编辑器文件
+*.log
+*.tmp
+*~
+.vscode/
+.idea/
+
+# 会话/调度等运行时数据
+*.session.json

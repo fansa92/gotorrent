@@ -379,7 +379,7 @@ func (p *rssPoller) poll(ctx context.Context) {
 	for _, sub := range p.subs {
 		items, err := fetchFeed(ctx, sub.URL)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "[RSS] %s 抓取失败: %v\n", sub.URL, err)
+			logWarn("%s 抓取失败: %v", sub.URL, err)
 			continue
 		}
 		for _, it := range items {
@@ -395,7 +395,7 @@ func (p *rssPoller) poll(ctx context.Context) {
 			changed = true
 			input, err := resolveTorrent(ctx, it)
 			if err != nil {
-				fmt.Fprintf(os.Stderr, "[RSS] %s 无法解析种子地址: %v\n", it.Title, err)
+				logWarn("%s 无法解析种子地址: %v", it.Title, err)
 				continue
 			}
 			spec := taskSpec{
@@ -405,7 +405,7 @@ func (p *rssPoller) poll(ctx context.Context) {
 				LimitRate:    sub.LimitRate,
 			}
 			if id, err := p.m.Add(spec); err != nil {
-				fmt.Fprintf(os.Stderr, "[RSS] %s 加入队列失败: %v\n", it.Title, err)
+				logWarn("%s 加入队列失败: %v", it.Title, err)
 			} else {
 				fmt.Fprintf(out, "[RSS] 已加入: %s (%s)\n", it.Title, id[:16])
 			}
@@ -413,7 +413,7 @@ func (p *rssPoller) poll(ctx context.Context) {
 	}
 	if changed {
 		if err := p.state.save(); err != nil {
-			fmt.Fprintf(os.Stderr, "[RSS] 保存去重状态失败: %v\n", err)
+			logWarn("保存去重状态失败: %v", err)
 		}
 	}
 }

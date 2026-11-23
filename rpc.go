@@ -76,6 +76,8 @@ func startRPC(ctx context.Context, m *Manager, listen, secret string, cancel con
 	mux.HandleFunc("/events", s.handleSSE)
 	mux.HandleFunc("/api/tasks", s.handleTasks)
 	mux.HandleFunc("/api/tasks/", s.handleTask)
+	mux.HandleFunc("/metrics", metricsHandler(s))
+	registerWebUI(mux, s.authorized, s.deny)
 	mux.HandleFunc("/", s.handleRoot)
 	s.srv = &http.Server{Handler: mux, ReadHeaderTimeout: 10 * time.Second}
 	go func() { _ = s.srv.Serve(ln) }()
@@ -137,6 +139,8 @@ func (s *rpcServer) handleRoot(w http.ResponseWriter, r *http.Request) {
 			"DEL  /api/tasks/{id} 移除任务",
 			"POST /api/tasks/{id}/pause | /resume",
 			"GET  /events         SSE 实时事件流",
+			"GET  /metrics        Prometheus 指标",
+			"GET  /ui             Web 控制面板",
 		},
 	})
 }
@@ -303,6 +307,9 @@ func (s *rpcServer) addTask(input string, opts map[string]any) (string, error) {
 	}
 	if v, ok := opts["max-upload-limit"].(string); ok {
 		spec.UploadRate = v
+	}
+	if v, ok := opts["tag"].(string); ok {
+		spec.Tag = v
 	}
 	return s.m.Add(spec)
 }

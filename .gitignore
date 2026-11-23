@@ -13,6 +13,9 @@ gotorrent-*
 session.json
 *.tmp
 
+# 临时转换/脚本文件
+_conv_tmp.py
+
 # 编辑器
 .vscode/
 .idea/

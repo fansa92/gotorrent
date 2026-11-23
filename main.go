@@ -90,17 +90,41 @@ type options struct {
 	rpcSecret      string   // --rpc-secret         控制面令牌鉴权(Authorization: Bearer)
 	rssFile        string   // --rss-file           RSS 订阅配置文件路径
 	rssInterval    int      // --rss-interval       RSS 轮询间隔(分钟),0 关闭
+	// 结构化日志
+	logLevel  string // --log-level    debug|info|warn|error
+	logFormat string // --log-format   text|json
+	logFile   string // --log-file     日志文件路径,空则只写 stderr
+	logRotate string // --log-rotate   单文件大小上限,如 10M;0 不轮转
+	logKeep   int    // --log-keep     轮转保留的历史文件数
+	schedule  string // --schedule     分时段限速规则文件
+	tag       string // --tag          任务标签
+	dirByType bool   // --dir-by-type  按文件类型自动归类到子目录
 }
 
 var opt options
 
+// hist 是全局历史库,main 里初始化;nil 表示降级(不可用)。
+var hist *historyDB
+
 func main() {
+	// 日志 bootstrap:先按配置文件默认值初始化,parseFlags 解析到显式 --log-*
+	// 后再 setupLogging 覆盖。这样 parseFlags / loadConfig 早期出错也能走结构化通道。
+	bootstrapLogging()
+	if len(os.Args) > 1 && os.Args[1] == "history" {
+		runHistory(os.Args[2:])
+		return
+	}
 	if len(os.Args) > 1 && os.Args[1] == "create" {
 		runCreate(os.Args[2:])
 		return
 	}
+	if len(os.Args) > 1 && os.Args[1] == "tui" {
+		runTUI(os.Args[2:])
+		return
+	}
 
 	parseFlags()
+	defer closeLogging()
 
 	// 任务来源:--resume 会话文件 + -i 批量文件 + 命令行位置参数,按此顺序去重合并。
 	var specs []taskSpec
@@ -119,7 +143,7 @@ func main() {
 	if opt.resume {
 		sess, err := loadSession()
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "[警告] 无法恢复会话: %v\n", err)
+			logWarn("无法恢复会话: %v", err)
 		} else {
 			applySessionOptions(sess.Options)
 			for _, s := range sess.Tasks {
@@ -176,6 +200,9 @@ func main() {
 		fatalf("初始化客户端失败: %v", err)
 	}
 	defer cl.Close()
+	// 历史库:非关键,打不开则降级(nil),不影响下载。
+	hist = openHistory()
+	defer func() { _ = hist.Close() }()
 
 	// Ctrl+C 优雅退出:第一次信号取消 context,让下载/做种循环正常收尾
 	// (走 defer cl.Close() 清理连接和端口映射);再按一次才强制退出。
@@ -197,6 +224,16 @@ func main() {
 		return // --all / --dry-run 已完成
 	}
 
+	// 分时段限速:命中规则时用全局封顶覆盖限速器。启动时立即生效,
+	// 之后每 30 秒随时间重算,适合长时间下载/做种/守护场景。
+	if opt.schedule != "" {
+		sched, err := loadScheduleFile(opt.schedule)
+		if err != nil {
+			fatalf("--schedule %s: %v", opt.schedule, err)
+		}
+		startSchedule(ctx, tl, sched)
+	}
+
 	// 守护模式:挂上控制面后常驻运行,等 Ctrl+C 或 RPC shutdown。
 	var rpc *rpcServer
 	if opt.daemon {
@@ -215,7 +252,7 @@ func main() {
 	// RSS 订阅:常驻轮询订阅源,命中的条目自动入队。
 	if opt.rssFile != "" {
 		if err := startRSS(ctx, m, opt.rssFile, opt.rssInterval); err != nil {
-			fmt.Fprintf(os.Stderr, "[警告] RSS 订阅启动失败: %v\n", err)
+			logWarn("RSS 订阅启动失败: %v", err)
 		}
 	}
 
@@ -294,10 +331,39 @@ func parseFlags() {
 	flag.StringVar(&opt.rpcSecret, "rpc-secret", cfgStr(cfg, "rpc-secret", ""), "控制面令牌鉴权,请求需带 Authorization: Bearer <token>")
 	flag.StringVar(&opt.rssFile, "rss-file", cfgStr(cfg, "rss-file", ""), "RSS 订阅配置文件,每行一个订阅")
 	flag.IntVar(&opt.rssInterval, "rss-interval", cfgInt(cfg, "rss-interval", 30), "RSS 轮询间隔(分钟),0 关闭")
+	// 结构化日志
+	flag.StringVar(&opt.logLevel, "log-level", cfgStr(cfg, "log-level", "info"), "日志级别 debug|info|warn|error [默认: info]")
+	flag.StringVar(&opt.logFormat, "log-format", cfgStr(cfg, "log-format", "text"), "日志格式 text|json [默认: text]")
+	flag.StringVar(&opt.logFile, "log-file", cfgStr(cfg, "log-file", ""), "日志文件路径,空则只写 stderr")
+	flag.StringVar(&opt.logRotate, "log-rotate", cfgStr(cfg, "log-rotate", ""), "单文件大小上限(如 10M)后轮转,0 不轮转")
+	flag.IntVar(&opt.logKeep, "log-keep", cfgInt(cfg, "log-keep", 7), "轮转保留的历史文件数 [默认: 7]")
+	flag.StringVar(&opt.schedule, "schedule", cfgStr(cfg, "schedule", ""), "分时段限速规则文件,每行 HH:MM-HH:MM,<下载>,<上传>")
+	flag.StringVar(&opt.tag, "tag", cfgStr(cfg, "tag", ""), "任务标签,用于分类与目录归类(可配合 --dir-by-type)")
+	flag.BoolVar(&opt.dirByType, "dir-by-type", cfgBool(cfg, "dir-by-type", false), "按文件类型自动归类到 <dir>/<video|audio|image|doc|...>/")
 
 	flag.Usage = usage
 	flag.Parse()
 
+	applyLogOptions()
+
+	switch strings.ToLower(opt.logLevel) {
+	case "debug", "info", "warn", "warning", "error":
+	default:
+		fatalf("--log-level 取值必须是 debug / info / warn / error")
+	}
+	switch strings.ToLower(opt.logFormat) {
+	case "text", "json":
+	default:
+		fatalf("--log-format 取值必须是 text / json")
+	}
+	if opt.logRotate != "" {
+		if n, err := parseSize(opt.logRotate); err != nil || n < 0 {
+			fatalf("--log-rotate: 非法大小 %q", opt.logRotate)
+		}
+	}
+	if opt.logKeep < 0 {
+		fatalf("--log-keep 不能为负数")
+	}
 	if opt.stallTimeout < 0 {
 		fatalf("--stall-timeout 不能为负数")
 	}
@@ -391,6 +457,13 @@ func usage() {
       --rss-file <文件>       RSS 订阅配置文件
       --rss-interval <分钟>   RSS 轮询间隔             [默认: 30]
 
+日志:
+      --log-level <级别>      debug|info|warn|error    [默认: info]
+      --log-format <格式>     text|json                [默认: text]
+      --log-file <路径>       日志文件,空则只写 stderr
+      --log-rotate <大小>     单文件大小上限后轮转,如 10M;0 不轮转
+      --log-keep <n>          轮转保留历史文件数        [默认: 7]
+
 控制面接口(同一套引擎,三种用法):
   POST /rpc             JSON-RPC 2.0,方法名对齐 aria2:
                          addUri / addTorrent / tellStatus / tellActive /
@@ -467,7 +540,7 @@ func fatalf(format string, a ...any) {
 	msg := fmt.Sprintf(format, a...)
 	// --json 模式下致命错误也要在 stdout 留一条结构化记录,便于上游脚本判定失败
 	emitError("", msg)
-	fmt.Fprintf(os.Stderr, "[错误] %s\n", msg)
+	logError("%s", msg)
 	os.Exit(1)
 }
 
@@ -478,8 +551,9 @@ func fatalf(format string, a ...any) {
 func runCreate(args []string) {
 	fs := flag.NewFlagSet("create", flag.ExitOnError)
 	var out, pieceLen, comment string
-	var private bool
+	var private, v2, hybrid bool
 	var trackers []string
+	var v2PieceLayers map[string]string
 	fs.StringVar(&out, "o", "", "输出文件 (默认 <名称>.torrent)")
 	fs.StringVar(&out, "out", "", "输出文件")
 	fs.Func("t", "tracker URL,可重复", func(s string) error { trackers = append(trackers, s); return nil })
@@ -489,6 +563,8 @@ func runCreate(args []string) {
 	fs.StringVar(&comment, "c", "", "备注")
 	fs.StringVar(&comment, "comment", "", "备注")
 	fs.BoolVar(&private, "private", false, "私有种子(禁用 DHT/PEX)")
+	fs.BoolVar(&v2, "v2", false, "制作 BitTorrent v2 种子(BEP 52,仅生成;加载为实验性)")
+	fs.BoolVar(&hybrid, "hybrid", false, "制作 v1+v2 混合种子(仅生成;加载为实验性)")
 	fs.Usage = func() {
 		fmt.Fprintf(os.Stderr, `用法: gotorrent create [选项] <文件|目录>
 
@@ -498,10 +574,17 @@ func runCreate(args []string) {
   -l, --piece-length <大小> 分片大小,如 256K、1M  [默认: 自动]
   -c, --comment <文本>      备注
       --private             私有种子(禁用 DHT/PEX)
+      --v2                  制作 BitTorrent v2 种子(BEP 52)
+      --hybrid              制作 v1+v2 混合种子(兼容老客户端)
+  说明: --v2 / --hybrid 生成的种子符合 BEP 52(可通过官方 validate-v2 校验),
+  但本版本对 v2/hybrid 的下载加载为实验性:库(v1.61.0)对 v2-only 在
+  AddTorrentOpt 阶段、hybrid 在关闭阶段存在内部崩溃,建议用 qBittorrent /
+  libtorrent 等客户端验证与下载。
 
 示例:
   gotorrent create ./myfile.iso
   gotorrent create -t udp://tracker.opentrackr.org:1337/announce -l 1M ./mydir
+  gotorrent create --hybrid -o ./myfile.torrent ./myfile
 `)
 	}
 	_ = fs.Parse(args)
@@ -528,12 +611,29 @@ func runCreate(args []string) {
 		}
 		info.PieceLength = n
 	}
-	fmt.Printf("[制作] 正在哈希 %s ...\n", root)
-	if err := info.BuildFromFilePath(root); err != nil {
-		fatalf("构建种子信息失败: %v", err)
-	}
-	if info.TotalLength() == 0 || info.NumPieces() == 0 {
-		fatalf("没有可制作的内容(空目录或空文件)")
+	if v2 || hybrid {
+		if fs.NArg() != 1 {
+			fs.Usage()
+			os.Exit(2)
+		}
+		fmt.Printf("[制作] 正在哈希(BitTorrent v2%s) %s ...\n", modeSuffix(v2, hybrid), root)
+		built, layers, err := buildV2FromPath(root, hybrid)
+		if err != nil {
+			fatalf("构建 v2 种子失败: %v", err)
+		}
+		info = *built
+		if info.TotalLength() == 0 || info.NumPieces() == 0 {
+			fatalf("没有可制作的内容(空目录或空文件)")
+		}
+		v2PieceLayers = layers
+	} else {
+		fmt.Printf("[制作] 正在哈希 %s ...\n", root)
+		if err := info.BuildFromFilePath(root); err != nil {
+			fatalf("构建种子信息失败: %v", err)
+		}
+		if info.TotalLength() == 0 || info.NumPieces() == 0 {
+			fatalf("没有可制作的内容(空目录或空文件)")
+		}
 	}
 	if private {
 		info.Private = &private
@@ -547,6 +647,7 @@ func runCreate(args []string) {
 		Comment:      comment,
 		CreatedBy:    "gotorrent " + version,
 		CreationDate: time.Now().Unix(),
+		PieceLayers:  v2PieceLayers, // v2:空 map 时 bencode omitempty,不影响 v1
 	}
 	if len(trackers) > 0 {
 		mi.Announce = trackers[0]
@@ -645,6 +746,10 @@ func newClient(tl *taskLimiter) (*torrent.Client, error) {
 		return nil, fmt.Errorf("打开断点数据库失败: %w(该下载目录可能已被另一个 gotorrent 实例占用)", err)
 	}
 	cfg.DefaultStorage = storage.NewFileWithCompletion(baseDir, completion)
+	// --dir-by-type / --tag:用自定义 TorrentDirMaker 让数据落到归类子目录。
+	if opt.dirByType {
+		cfg.DefaultStorage = classifyStorage(baseDir, completion)
+	}
 
 	// 限速总闸由 taskLimiter 按活跃任务的独立配额动态调整。
 	// 注意不能传 nil 或 limit=0:checkConfig 会把 0 判为错误配置。
@@ -816,22 +921,22 @@ func saveMetaCache(t *torrent.Torrent) {
 	mi := t.Metainfo()
 	tmp, err := os.CreateTemp(filepath.Dir(path), ".meta-*.tmp")
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "[警告] 保存元数据缓存失败: %v\n", err)
+		logWarn("保存元数据缓存失败: %v", err)
 		return
 	}
 	tmpName := tmp.Name()
 	defer os.Remove(tmpName)
 	if err := mi.Write(tmp); err != nil {
 		tmp.Close()
-		fmt.Fprintf(os.Stderr, "[警告] 保存元数据缓存失败: %v\n", err)
+		logWarn("保存元数据缓存失败: %v", err)
 		return
 	}
 	if err := tmp.Close(); err != nil {
-		fmt.Fprintf(os.Stderr, "[警告] 保存元数据缓存失败: %v\n", err)
+		logWarn("保存元数据缓存失败: %v", err)
 		return
 	}
 	if err := os.Rename(tmpName, path); err != nil {
-		fmt.Fprintf(os.Stderr, "[警告] 保存元数据缓存失败: %v\n", err)
+		logWarn("保存元数据缓存失败: %v", err)
 		return
 	}
 	fmt.Fprintf(out, "[缓存] 元数据已保存: %s\n", filepath.Base(path))
@@ -913,6 +1018,7 @@ func (tk *task) snapshot() jsonStatus {
 		ETA:           round2(eta),
 		Active:        0,
 		Queued:        0,
+		Tag:           firstNonEmpty(tk.spec.Tag, opt.tag),
 		Error:         tk.err,
 		CreatedAt:     tk.created.Format(time.RFC3339),
 	}

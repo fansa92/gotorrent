@@ -24,6 +24,8 @@ type taskLimiter struct {
 	down   *rate.Limiter
 	up     *rate.Limiter
 	active map[*task]struct{}
+	// scheduleCap 是分时段限速器设置的"全局封顶"(0 = 本时段不限,由任务配额决定)。
+	capDown, capUp int64
 }
 
 func newTaskLimiter() *taskLimiter {
@@ -55,8 +57,41 @@ func (l *taskLimiter) setActive(tasks []*task) {
 			up += u
 		}
 	}
-	setRate(l.down, down)
-	setRate(l.up, up)
+	setRate(l.down, minCap(down, l.capDown))
+	setRate(l.up, minCap(up, l.capUp))
+}
+
+// setScheduleCap 由调度协程调用,设置当前时段的全局封顶后立即重算总闸。
+// 0 表示本时段不限(总闸由任务配额之和决定)。
+func (l *taskLimiter) setScheduleCap(down, up int64) {
+	l.mu.Lock()
+	l.capDown, l.capUp = down, up
+	downSum, upSum := l.sumLocked()
+	setRate(l.down, minCap(downSum, down))
+	setRate(l.up, minCap(upSum, up))
+	l.mu.Unlock()
+}
+
+func (l *taskLimiter) sumLocked() (down, up int64) {
+	for tk := range l.active {
+		if tk.done {
+			continue
+		}
+		if d, err := parseSize(firstNonEmpty(tk.spec.LimitRate, opt.limitRate)); err == nil && d > 0 {
+			down += d
+		}
+		if u, err := parseSize(firstNonEmpty(tk.spec.UploadRate, opt.maxUploadRate)); err == nil && u > 0 {
+			up += u
+		}
+	}
+	return down, up
+}
+
+func minCap(sum, capVal int64) int64 {
+	if capVal > 0 && (sum <= 0 || sum > capVal) {
+		return capVal
+	}
+	return sum
 }
 
 func setRate(l *rate.Limiter, total int64) {

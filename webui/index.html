@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>gotorrent 控制面板</title>
+<style>
+  :root { --bg:#0f1115; --card:#1a1d24; --acc:#4f8cff; --ok:#35c46a; --warn:#f0a63a; --err:#ef5350; --txt:#e6e8ee; --sub:#8b90a0; }
+  * { box-sizing:border-box; }
+  body { margin:0; font-family:system-ui,-apple-system,"Segoe UI",sans-serif; background:var(--bg); color:var(--txt); }
+  header { display:flex; align-items:center; gap:16px; padding:14px 20px; background:var(--card); border-bottom:1px solid #262a33; }
+  header h1 { font-size:18px; margin:0; }
+  .stats { display:flex; gap:18px; margin-left:auto; font-size:13px; color:var(--sub); }
+  .stats b { color:var(--txt); }
+  main { padding:20px; max-width:1100px; margin:0 auto; }
+  .toolbar { display:flex; gap:10px; margin-bottom:16px; flex-wrap:wrap; }
+  input[type=text] { flex:1; min-width:240px; padding:9px 12px; background:#0b0d12; border:1px solid #2a2f3a; border-radius:6px; color:var(--txt); }
+  button { padding:9px 16px; background:var(--acc); border:0; border-radius:6px; color:#fff; cursor:pointer; font-weight:600; }
+  button.ghost { background:#2a2f3a; }
+  button:hover { filter:brightness(1.1); }
+  .card { background:var(--card); border:1px solid #262a33; border-radius:10px; padding:16px; margin-bottom:12px; }
+  .row { display:flex; align-items:center; gap:12px; }
+  .name { font-weight:600; word-break:break-all; }
+  .meta { font-size:12px; color:var(--sub); margin-top:4px; }
+  .bar { height:6px; background:#0b0d12; border-radius:4px; overflow:hidden; margin-top:8px; }
+  .bar > div { height:100%; background:var(--acc); transition:width .3s; }
+  .badge { font-size:11px; padding:2px 8px; border-radius:10px; background:#2a2f3a; }
+  .badge.downloading,.badge.seeding { color:var(--ok); }
+  .badge.paused,.badge.queued,.badge.waiting { color:var(--warn); }
+  .badge.error { color:var(--err); }
+  .badge.complete { color:var(--acc); }
+  .actions { margin-left:auto; display:flex; gap:6px; }
+  .actions button { padding:5px 10px; font-size:12px; }
+  .empty { text-align:center; color:var(--sub); padding:40px; }
+  .dot { width:8px; height:8px; border-radius:50%; background:var(--ok); display:inline-block; margin-right:4px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>⬇ gotorrent</h1>
+  <span class="badge" id="conn"><span class="dot"></span>已连接</span>
+  <div class="stats">
+    <span>下载 <b id="dlspeed">0 B/s</b></span>
+    <span>上传 <b id="ulspeed">0 B/s</b></span>
+    <span>活跃 <b id="active">0</b></span>
+    <span>队列 <b id="queued">0</b></span>
+  </div>
+</header>
+<main>
+  <div class="toolbar">
+    <input type="text" id="uri" placeholder="粘贴 magnet 链接或 .torrent 路径" />
+    <button onclick="addTask()">添加任务</button>
+    <button class="ghost" onclick="refresh()">刷新</button>
+  </div>
+  <div id="list"></div>
+</main>
+<script>
+let token = new URLSearchParams(location.search).get('token') || '';
+let tasks = {};
+const authHeaders = () => token ? {'Authorization':'Bearer '+token} : {};
+
+function fmtSpeed(b){ if(!b) return '0 B/s'; const u=['B','KB','MB','GB']; let i=0; while(b>=1024&&i<u.length-1){b/=1024;i++;} return b.toFixed(1)+' '+u[i]+'/s'; }
+function fmtSize(b){ if(!b) return '0 B'; const u=['B','KB','MB','GB','TB']; let i=0; while(b>=1024&&i<u.length-1){b/=1024;i++;} return b.toFixed(1)+' '+u[i]; }
+function fmtETA(s){ if(!s||s<=0) return '--:--'; s=Math.round(s); const h=Math.floor(s/3600), m=Math.floor(s%3600/60), sec=s%60; return (h?h+':':'')+String(m).padStart(2,'0')+':'+String(sec).padStart(2,'0'); }
+
+async function api(path, opt={}) {
+  const res = await fetch(path, {headers:{...authHeaders(), 'Content-Type':'application/json'}, ...opt});
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+async function refresh() {
+  try {
+    tasks = {};
+    const list = await api('/api/tasks');
+    (list||[]).forEach(t => tasks[t.id]=t);
+    render();
+  } catch(e) { document.getElementById('conn').innerHTML = '连接失败'; }
+}
+
+function render() {
+  const el = document.getElementById('list');
+  const arr = Object.values(tasks);
+  document.getElementById('active').textContent = arr.filter(t=>t.state==='downloading'||t.state==='seeding').length;
+  document.getElementById('queued').textContent = arr.filter(t=>['queued','waiting','paused'].includes(t.state)).length;
+  let dl=0,ul=0; arr.forEach(t=>{dl+=t.download_speed||0; ul+=t.upload_speed||0;});
+  document.getElementById('dlspeed').textContent = fmtSpeed(dl);
+  document.getElementById('ulspeed').textContent = fmtSpeed(ul);
+  if (!arr.length) { el.innerHTML = '<div class="empty">暂无任务,粘贴链接添加一个吧</div>'; return; }
+  el.innerHTML = arr.map(t => {
+    const pct = t.total>0 ? Math.min(100, (t.completed/t.total*100)).toFixed(1) : 0;
+    return `<div class="card">
+      <div class="row">
+        <span class="badge ${t.state}">${t.state}</span>
+        <div style="flex:1">
+          <div class="name">${escapeHtml(t.name||t.id.slice(0,16))}</div>
+          <div class="meta">${fmtSize(t.completed)} / ${fmtSize(t.total)} · ↓${fmtSpeed(t.download_speed)} ↑${fmtSpeed(t.upload_speed)} · 对${t.peers||0}/种${t.seeders||0} · ETA ${fmtETA(t.eta_seconds)}${t.tag?' · <span class="badge">'+escapeHtml(t.tag)+'</span>':''}</div>
+        </div>
+        <div class="actions">
+          ${['downloading','waiting','queued','seeding'].includes(t.state)?`<button class="ghost" onclick="pause('${t.id}')">暂停</button>`:''}
+          ${['paused'].includes(t.state)?`<button class="ghost" onclick="resume('${t.id}')">继续</button>`:''}
+          <button class="ghost" onclick="remove('${t.id}')">删除</button>
+        </div>
+      </div>
+      <div class="bar"><div style="width:${pct}%"></div></div>
+    </div>`;
+  }).join('');
+}
+function escapeHtml(s){ return (s||'').replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+
+async function addTask() {
+  const uri = document.getElementById('uri').value.trim();
+  if (!uri) return;
+  try { await api('/api/tasks', {method:'POST', body: JSON.stringify({uri})}); document.getElementById('uri').value=''; refresh(); }
+  catch(e) { alert('添加失败: '+e.message); }
+}
+async function pause(id){ try{ await api('/api/tasks/'+id+'/pause',{method:'POST'}); refresh(); }catch(e){alert(e.message);} }
+async function resume(id){ try{ await api('/api/tasks/'+id+'/resume',{method:'POST'}); refresh(); }catch(e){alert(e.message);} }
+async function remove(id){ if(!confirm('确认删除该任务?'))return; try{ await api('/api/tasks/'+id,{method:'DELETE'}); refresh(); }catch(e){alert(e.message);} }
+
+// SSE 实时更新
+function connectSSE() {
+  const url = '/events' + (token ? '?token='+encodeURIComponent(token) : '');
+  const es = new EventSource(url);
+  es.onopen = () => document.getElementById('conn').innerHTML = '<span class="dot"></span>已连接';
+  es.onerror = () => document.getElementById('conn').innerHTML = '<span class="dot" style="background:var(--err)"></span>重连中';
+  ['added','start','progress','complete','paused','resumed','removed','seeding','error'].forEach(ev => {
+    es.addEventListener(ev, e => {
+      try { const t = JSON.parse(e.data); if (t.id) { tasks[t.id]=t; render(); } } catch(_){}
+    });
+  });
+}
+connectSSE();
+refresh();
+setInterval(refresh, 5000);
+</script>
+</body>
+</html>

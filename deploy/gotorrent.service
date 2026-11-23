@@ -1,0 +1,55 @@
+[Unit]
+Description=gotorrent BitTorrent 下载守护进程
+Documentation=file:///opt/gotorrent/README.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=gotorrent
+Group=gotorrent
+
+# 下载目录与配置目录(需存在且归 gotorrent 所有)
+Environment=HOME=/var/lib/gotorrent
+WorkingDirectory=/var/lib/gotorrent
+
+# 控制面监听 127.0.0.1:6800(仅本机访问);
+# 如需局域网访问改 0.0.0.0:6800,并务必设置 --rpc-secret。
+# 令牌建议放 EnvironmentFile(权限 600),避免明文写进 unit。
+EnvironmentFile=-/etc/gotorrent/gotorrent.env
+ExecStart=/usr/local/bin/gotorrent \
+    --daemon \
+    --rpc-listen 127.0.0.1:6800 \
+    --rpc-secret ${RPC_SECRET} \
+    -d /var/lib/gotorrent/downloads
+
+# 优雅停止:先 SIGTERM 让任务收尾,超时再 SIGKILL
+KillSignal=SIGTERM
+TimeoutStopSec=30
+
+# 自动重启与退避
+Restart=on-failure
+RestartSec=5
+
+# 基础加固
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+
+# 可写目录:下载、配置、历史库
+ReadWritePaths=/var/lib/gotorrent
+
+# 日志走 journald
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=gotorrent
+
+[Install]
+WantedBy=multi-user.target
