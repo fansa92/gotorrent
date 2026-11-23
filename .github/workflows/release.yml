@@ -23,7 +23,7 @@ jobs:
           - { goos: linux, goarch: arm, goarm: "7", arch: armv7 }
           - { goos: linux, goarch: arm, goarm: "6", arch: armv6 }
           - { goos: windows, goarch: amd64, arch: amd64 }
-          - { goos: windows, goarch: "386", arch: "386" }
+          # Windows/386 不支持:间接依赖 modernc.org/sqlite v1.21.1 未提供 386 的构建定义
           - { goos: windows, goarch: arm64, arch: arm64 }
           - { goos: darwin, goarch: amd64, arch: amd64 }
           - { goos: darwin, goarch: arm64, arch: arm64 }
