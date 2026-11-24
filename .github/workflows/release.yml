@@ -5,6 +5,8 @@ on:
   push:
     tags:
       - "v*"
+  # 手动触发仅做构建验证,不会发布 Release
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -127,6 +129,7 @@ jobs:
 
   release:
     name: 发布 Release
+    if: github.event_name == 'push'
     needs: [build, universal]
     runs-on: ubuntu-latest
     permissions:
