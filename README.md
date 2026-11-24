@@ -23,7 +23,18 @@ gotorrent_<版本>_<系统>_<架构>.tar.gz   # Linux / macOS / FreeBSD
 gotorrent_<版本>_<系统>_<架构>.zip      # Windows
 ```
 
-提供的架构：`amd64`、`arm64`、`386`（仅 Linux）、`armv7` / `armv6`（仅 Linux）。Windows 提供 `amd64` 与 `arm64`（32 位 Windows 因依赖库限制不提供）。
+提供的平台与架构（全部由 GitHub Actions 云端交叉编译）：
+
+| 系统 | 架构 |
+| --- | --- |
+| Linux | `amd64`、`arm64`、`386`、`armv7`、`armv6`、`ppc64le`、`riscv64`、`s390x` |
+| macOS | `amd64`、`arm64`，另提供 `universal` 通用包（单个二进制同时支持两种架构） |
+| Windows | `amd64`、`arm64` |
+| FreeBSD | `amd64`、`arm64`、`386`、`armv7` |
+| NetBSD | `amd64` |
+| OpenBSD | `amd64`、`arm64` |
+
+Windows/386 以及 loong64、dragonfly、solaris、aix 等目标暂不提供：间接依赖 `modernc.org/sqlite` 没有对应的平台构建文件。
 
 ### 源码编译
 
