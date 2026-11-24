@@ -31,10 +31,11 @@ gotorrent_<版本>_<系统>_<架构>.zip      # Windows
 | macOS | `amd64`、`arm64`，另提供 `universal` 通用包（单个二进制同时支持两种架构） |
 | Windows | `amd64`、`arm64` |
 | FreeBSD | `amd64`、`arm64`、`386`、`armv7` |
-| NetBSD | `amd64` |
-| OpenBSD | `amd64`、`arm64` |
 
-Windows/386 以及 loong64、dragonfly、solaris、aix 等目标暂不提供：间接依赖 `modernc.org/sqlite` 没有对应的平台构建文件。
+暂不提供的目标：
+
+- Windows/386、loong64、dragonfly、solaris、aix：间接依赖 `modernc.org/sqlite` 没有对应的平台构建文件。
+- NetBSD、OpenBSD：依赖库 `anacrolix/torrent` 使用了这两个平台未定义的 `unix.SEEK_DATA` 常量。
 
 ### 源码编译
 

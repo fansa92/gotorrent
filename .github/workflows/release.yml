@@ -36,9 +36,8 @@ jobs:
           - { goos: freebsd, goarch: arm64, arch: arm64 }
           - { goos: freebsd, goarch: "386", arch: "386" }
           - { goos: freebsd, goarch: arm, goarm: "7", arch: armv7 }
-          - { goos: netbsd, goarch: amd64, arch: amd64 }
-          - { goos: openbsd, goarch: amd64, arch: amd64 }
-          - { goos: openbsd, goarch: arm64, arch: arm64 }
+          # NetBSD / OpenBSD 不支持:anacrolix/torrent v1.61.0 的 storage/sys_unix.go
+          # 使用 unix.SEEK_DATA,而 golang.org/x/sys 在这两个平台未定义该常量
     steps:
       - uses: actions/checkout@v4
         with:
