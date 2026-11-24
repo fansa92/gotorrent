@@ -108,8 +108,12 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p x64 arm64 staging
-          tar -xzf dmgs/amd64/*.tar.gz -C x64
-          tar -xzf dmgs/arm64/*.tar.gz -C arm64
+          AMD_TAR="$(find dmgs/amd64 -type f -name '*.tar.gz' | head -1)"
+          ARM_TAR="$(find dmgs/arm64 -type f -name '*.tar.gz' | head -1)"
+          test -s "$AMD_TAR"
+          test -s "$ARM_TAR"
+          tar -xzf "$AMD_TAR" -C x64
+          tar -xzf "$ARM_TAR" -C arm64
           AMD_BIN="$(find x64 -type f -name gotorrent | head -1)"
           ARM_BIN="$(find arm64 -type f -name gotorrent | head -1)"
           README="$(find x64 -type f -name README.md | head -1)"
